@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>JSGo ATC — Data Flow</title>
+<style>
+  :root { --bg:#fafaf7; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--ink); padding: 24px 32px; }
+  header { max-width: 1500px; margin: 0 auto 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .legend { max-width: 1500px; margin: 0 auto 16px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+  .legend .chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: white; font-weight: 600; }
+  .wrap { max-width: 1500px; margin: 0 auto; background: white; border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow: auto; }
+  .notes { max-width: 1500px; margin: 16px auto 0; background: white; border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; font-size: 14px; line-height: 1.55; }
+  .notes h2 { font-size: 13px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .notes ol { margin: 0; padding-left: 20px; }
+  .notes li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>JSGo ATC — Data Flow</h1>
+  <div class="sub">How data moves through ATC. Numbered flows trace the eight named data paths; the diagram shows their shared components and dependencies.</div>
+</header>
+<div class="legend">
+  <span class="chip" style="color:#1e40af">① Voice intake</span>
+  <span class="chip" style="color:#15803d">② Daily Zoho sync</span>
+  <span class="chip" style="color:#b91c1c">③ Scoring + alerts</span>
+  <span class="chip" style="color:#7e22ce">④ Coaching loop</span>
+  <span class="chip" style="color:#a16207">⑤ Encourager digest</span>
+  <span class="chip" style="color:#0e7c97">⑥ Givebutter webhook</span>
+  <span class="chip" style="color:#374151">⑦ Stipend CSV</span>
+  <span class="chip" style="color:#dc2626">⑧ Voice Q&amp;A</span>
+</div>
+<div class="wrap">
+<div class="mermaid">
+flowchart TB
+
+  DM["DM phone<br/>(WhatsApp)"]
+  TWILIO["Twilio"]
+  BE["ATC backend"]
+  S3[("S3 audio")]
+  TRANSCRIBE["Transcribe"]
+  PG[("Postgres<br/>+ pgvector")]
+  ZOHO[("Zoho CRM")]
+  SCORE["scoring_engine<br/>+ alert engine"]
+  ALERTS[("dm_alerts")]
+  COACH_LOOP["coaching_loop<br/>RAG → Bedrock"]
+  BEDROCK["Bedrock"]
+  RAG[("TeachingChunk<br/>pgvector"  )]
+  POLLY["Polly TTS"]
+  COACH["Coach phone"]
+  TRANSLATE["translation.py"]
+  DIGEST[("Encourager<br/>digest payload")]
+  PP["PenPal"]
+  GB["Givebutter"]
+  STAGE[("staged donor<br/>events"  )]
+  STIPEND["generate_payout.py"]
+  CSV[("monthly stipend<br/>CSV"  )]
+  FW["Flutterwave<br/>(Phase 2)"]
+  QA["voice_qa"]
+
+  DM -- "① voice note" --> TWILIO
+  TWILIO -- "① audio URL" --> BE
+  BE -- "① download<br/>+ store" --> S3
+  S3 -- "① audio file" --> TRANSCRIBE
+  TRANSCRIBE -- "① transcription" --> PG
+
+  ZOHO -- "② COQL keyset<br/>daily 02:00 UTC" --> BE
+  BE -- "② upsert DMs<br/>+ reports" --> PG
+
+  PG -- "③ DAR + profile<br/>rows" --> SCORE
+  SCORE -- "③ alert rules fired" --> ALERTS
+  ALERTS -- "③ FR coaching audio<br/>via Polly + Twilio" --> COACH
+
+  PG -- "④ DM context" --> COACH_LOOP
+  RAG -- "④ Scripture +<br/>training content" --> COACH_LOOP
+  COACH_LOOP -- "④ prompt" --> BEDROCK
+  BEDROCK -- "④ response text" --> COACH_LOOP
+  COACH_LOOP -- "④ FR text" --> POLLY
+  POLLY -- "④ audio file" --> S3
+  S3 -- "④ presigned URL<br/>via Twilio" --> COACH
+
+  PG -- "⑤ weekly DM content<br/>(prayer + thanksgiving<br/>+ testimony)" --> TRANSLATE
+  TRANSLATE -- "⑤ EN translation" --> DIGEST
+  DIGEST -- "⑤ POST<br/>(Phase 2)" --> PP
+
+  GB -- "⑥ HMAC webhook<br/>subscription.*" --> BE
+  BE -- "⑥ staged events" --> STAGE
+  STAGE -- "⑥ flip<br/>penpal_listed<br/>(Phase 2)" --> PG
+
+  PG -- "⑦ active + listed DMs" --> STIPEND
+  STIPEND -- "⑦ monthly CSV" --> CSV
+  CSV -- "⑦ Phase 2" --> FW
+
+  DM -- "⑧ free-form question<br/>(voice in FR)" --> TWILIO
+  TWILIO --> BE
+  BE --> TRANSCRIBE
+  TRANSCRIBE --> QA
+  QA --> BEDROCK
+  RAG -.-> QA
+  QA --> POLLY
+  POLLY --> DM
+
+  classDef store fill:#dcfce7,stroke:#15803d,color:#14532d;
+  classDef service fill:#dbeafe,stroke:#1e40af,color:#1e3a8a;
+  classDef ai fill:#f3e8ff,stroke:#7e22ce,color:#581c87;
+  classDef ext fill:#fef3c7,stroke:#a16207,color:#78350f;
+  classDef client fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d;
+
+  class S3,PG,RAG,ALERTS,DIGEST,STAGE,CSV store;
+  class BE,SCORE,COACH_LOOP,TRANSLATE,STIPEND,QA service;
+  class TRANSCRIBE,BEDROCK,POLLY ai;
+  class ZOHO,PP,GB,FW,TWILIO ext;
+  class DM,COACH client;
+</div>
+</div>
+<div class="notes">
+  <h2>The eight flows in plain words</h2>
+  <ol>
+    <li><b>Voice intake.</b> DM speaks → Twilio → ATC backend → S3 → Transcribe → field on Postgres.</li>
+    <li><b>Daily Zoho sync.</b> 02:00 UTC pull of Contacts + Daily_Reports + Monthly_Reports into Postgres via COQL with keyset pagination.</li>
+    <li><b>Scoring and alerts.</b> Postgres data feeds scoring_engine; alert rules fire, write to dm_alerts; FR coaching audio goes to the coach via Polly + Twilio.</li>
+    <li><b>Coaching loop.</b> Per-DM context plus the three-tier RAG corpus (Scripture, JSG training, cultural) feeds Bedrock to generate a coaching prompt; the response is voiced by Polly and delivered to the coach.</li>
+    <li><b>Encourager digest.</b> Weekly DM content (prayer + thanksgiving + testimony) is translated FR→EN, packaged into a digest payload, and POSTed to PenPal in Phase 2.</li>
+    <li><b>Givebutter webhook.</b> Donor subscription events arrive via HMAC-signed webhook, stage to a queue, and flip penpal_listed on the matched DM once PenPal donor-DM mapping is live (Phase 2).</li>
+    <li><b>Stipend CSV.</b> Monthly generator produces a provider-agnostic CSV from active, listed DMs; Phase 2 feeds Flutterwave.</li>
+    <li><b>Voice Q&amp;A.</b> Free-form DM question → Transcribe → voice_qa retrieves from RAG, generates via Bedrock, voices via Polly, returns to DM. Citations stored on QAExchange.sources.</li>
+  </ol>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'base',
+    themeVariables: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif', fontSize: '12px', primaryColor: '#ffffff', primaryBorderColor: '#94a3b8', primaryTextColor: '#1f2937', lineColor: '#64748b', clusterBkg: '#f8fafc', clusterBorder: '#cbd5e1' },
+    flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: false }
+  });
+</script>
+</body>
+</html>
